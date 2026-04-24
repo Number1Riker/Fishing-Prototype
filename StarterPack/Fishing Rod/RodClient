@@ -1,0 +1,45 @@
+local RP = game.ReplicatedStorage
+
+local Events = RP:WaitForChild("Events")
+local FishingEvents = Events:WaitForChild("FishingEvents")
+
+local Rod = script.Parent
+local RodHighlight = Rod:WaitForChild("Highlight")
+
+local hasBite = false
+
+local function ClearBite()
+	hasBite = false
+	RodHighlight.Enabled = false
+end
+
+local function RodClick()
+	print("[Rod] Click, hasBite =", hasBite)
+
+	if hasBite then
+		print("[Rod] Request StartMinigame")
+		FishingEvents:WaitForChild("StartMinigameRequest"):FireServer()
+		return
+	end
+
+	print("[Rod] StartFishing")
+	FishingEvents:WaitForChild("StartFishing"):FireServer()
+end
+
+FishingEvents:WaitForChild("FishBite").OnClientEvent:Connect(function()
+	print("[Rod] FishBite")
+	hasBite = true
+	RodHighlight.Enabled = true
+end)
+
+FishingEvents:WaitForChild("CancelBite").OnClientEvent:Connect(function()
+	print("[Rod] CancelBite")
+	ClearBite()
+end)
+
+FishingEvents:WaitForChild("StartMinigame").OnClientEvent:Connect(function()
+	print("[Rod] StartMinigame (client)")
+	ClearBite()
+end)
+
+Rod.Activated:Connect(RodClick)

@@ -1,0 +1,11 @@
+local RP = game.ReplicatedStorage
+local FishModules = RP:WaitForChild("Modules"):WaitForChild("FishingModules")
+
+local FishingClient = require(FishModules:WaitForChild("FishingClient"))
+
+-- anti double init
+if script:GetAttribute("InitDone") then return end
+script:SetAttribute("InitDone", true)
+
+FishingClient:Init()
+print("[FishingClientInit] Init")

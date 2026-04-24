@@ -1,0 +1,8 @@
+local RP = game.ReplicatedStorage
+local FishModules = RP:WaitForChild("Modules").FishingModules
+
+local FishingService = require(FishModules.FishingService)
+local InventoryService = require(FishModules.InventoryService)
+
+InventoryService:Init()
+FishingService:Init()

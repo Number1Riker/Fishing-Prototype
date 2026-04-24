@@ -1,0 +1,396 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+
+local RP = game.ReplicatedStorage
+local Events = RP:WaitForChild("Events")
+local InventoryEvents = Events:WaitForChild("InventoryEvents")
+local FishingEvents = Events:WaitForChild("FishingEvents")
+
+local GetInventory = InventoryEvents:WaitForChild("GetInventory")
+local InventoryChanged = InventoryEvents:WaitForChild("InventoryChanged")
+local DebugStartFish = FishingEvents:WaitForChild("DebugStartFish")
+
+local FishModules = RP:WaitForChild("Modules"):WaitForChild("FishingModules")
+local FishData = require(FishModules:WaitForChild("FishData"))
+
+-- config
+local TOGGLE_KEY = Enum.KeyCode.C
+local DETAILS_DARKEN_MULT = 0.75
+local UNFOUND_ICON_COLOR = Color3.fromRGB(25, 25, 25)
+local UNFOUND_ICON_TRANSPARENCY = 0.15
+local UNFOUND_TEXT_TRANSPARENCY = 0.35
+local UNFOUND_DETAILS_TEXT = "???"
+
+local function FindGuiAndFrame()
+	local pg = player:WaitForChild("PlayerGui")
+	while true do
+		local gui = pg:FindFirstChild("FishInventory", true)
+		if gui and gui:IsA("ScreenGui") then
+			return gui, gui:WaitForChild("Frame")
+		end
+		task.wait(0.1)
+	end
+end
+
+local gui, frame = FindGuiAndFrame()
+
+local list = frame:WaitForChild("List")
+local instances = frame:WaitForChild("Instances")
+local backButton = frame:WaitForChild("BackButton")
+local closeButton = frame:WaitForChild("CloseButton")
+
+local typeTemplate = list:WaitForChild("FishSlot")
+local instTemplate = instances:WaitForChild("InstanceSlot")
+
+typeTemplate.Visible = false
+instTemplate.Visible = false
+
+local latestProfile
+local selectedFish
+local view = "types"
+
+local spawnedTypes = {}
+local spawnedInstances = {}
+
+local isOpen = true
+
+local function IsShiftDown()
+	return UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+		or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+end
+
+local function rarityLabel(baseRarity)
+	baseRarity = baseRarity or 100
+	if baseRarity >= 80 then return "Common" end
+	if baseRarity >= 40 then return "Uncommon" end
+	if baseRarity >= 15 then return "Rare" end
+	if baseRarity >= 6 then return "Epic" end
+	return "Legendary"
+end
+
+local function clear(map)
+	for _, inst in pairs(map) do
+		inst:Destroy()
+	end
+	table.clear(map)
+end
+
+local function showTypes()
+	view = "types"
+	selectedFish = nil
+	list.Visible = true
+	instances.Visible = false
+	backButton.Visible = false
+end
+
+local function showInstances(fishName)
+	view = "instances"
+	selectedFish = fishName
+	list.Visible = false
+	instances.Visible = true
+	backButton.Visible = true
+end
+
+local function bestInstance(instancesList)
+	local best
+	for _, inst in ipairs(instancesList) do
+		if not best or (inst.Size or 0) > (best.Size or 0) then
+			best = inst
+		end
+	end
+	return best
+end
+
+local function darken(c: Color3, mult: number)
+	return Color3.new(
+		math.clamp(c.R * mult, 0, 1),
+		math.clamp(c.G * mult, 0, 1),
+		math.clamp(c.B * mult, 0, 1)
+	)
+end
+
+local function applyFishColor(slot: Instance, fishName: string)
+	local info = FishData.Fish[fishName]
+	local c = info and info.Color
+	if not c then return end
+
+	local topName = slot:FindFirstChild("FishName")
+	if topName and topName:IsA("TextLabel") then
+		topName.TextColor3 = c
+	end
+
+	local fishIcon = slot:FindFirstChild("FishIcon")
+	if fishIcon then
+		local stroke = fishIcon:FindFirstChildOfClass("UIStroke")
+		if stroke then
+			stroke.Color = c
+		end
+
+		local iconName = fishIcon:FindFirstChild("FishName")
+		if iconName and iconName:IsA("TextLabel") then
+			iconName.TextColor3 = c
+		end
+	end
+
+	local details = slot:FindFirstChild("Details")
+	if details then
+		local darker = darken(c, DETAILS_DARKEN_MULT)
+
+		for _, child in ipairs(details:GetChildren()) do
+			if child:IsA("TextLabel") then
+				child.TextColor3 = darker
+			end
+		end
+	end
+end
+
+local function setNameIconColor(slot: Instance, fishName: string)
+	local info = FishData.Fish[fishName]
+	local displayName = (info and info.Name) or fishName
+
+	local function trySetName(parent)
+		local lbl = parent:FindFirstChild("FishName")
+		if lbl and lbl:IsA("TextLabel") then
+			lbl.Text = displayName
+		end
+	end
+
+	trySetName(slot)
+
+	local fishIcon = slot:FindFirstChild("FishIcon")
+	if fishIcon then
+		trySetName(fishIcon)
+
+		if info and info.Icon and fishIcon:IsA("ImageLabel") then
+			fishIcon.Image = info.Icon
+		end
+	end
+
+	applyFishColor(slot, fishName)
+end
+
+local function applyUnfoundLook(slot: Instance, fishName: string)
+	local info = FishData.Fish[fishName]
+
+	local topName = slot:FindFirstChild("FishName")
+	if topName and topName:IsA("TextLabel") then
+		topName.TextTransparency = UNFOUND_TEXT_TRANSPARENCY
+	end
+
+	local fishIcon = slot:FindFirstChild("FishIcon")
+	if fishIcon and fishIcon:IsA("ImageLabel") then
+		fishIcon.ImageColor3 = UNFOUND_ICON_COLOR
+		fishIcon.ImageTransparency = UNFOUND_ICON_TRANSPARENCY
+
+		local stroke = fishIcon:FindFirstChildOfClass("UIStroke")
+		if stroke then
+			stroke.Transparency = 0.35
+		end
+
+		local iconName = fishIcon:FindFirstChild("FishName")
+		if iconName and iconName:IsA("TextLabel") then
+			iconName.TextTransparency = UNFOUND_TEXT_TRANSPARENCY
+		end
+
+		if info and info.Icon then
+			fishIcon.Image = info.Icon
+		end
+	end
+
+	local details = slot:FindFirstChild("Details")
+	if details then
+		for _, child in ipairs(details:GetChildren()) do
+			if child:IsA("TextLabel") then
+				child.TextTransparency = UNFOUND_TEXT_TRANSPARENCY
+				child.Text = child.Name .. ": " .. UNFOUND_DETAILS_TEXT
+			end
+		end
+	end
+end
+
+local function renderInstances(profile, fishName)
+	clear(spawnedInstances)
+
+	local bucket = profile and profile.Fish and profile.Fish[fishName]
+	local instList = bucket and bucket.Instances or {}
+
+	for i, inst in ipairs(instList) do
+		local row = instTemplate:Clone()
+		row.Name = "Instance_" .. i
+		row.Visible = true
+		row.Parent = instances
+		spawnedInstances[i] = row
+
+		setNameIconColor(row, fishName)
+
+		local details = row:FindFirstChild("Details")
+		if details then
+			if details:FindFirstChild("Weight") then
+				details.Weight.Text = "Weight: " .. math.floor((inst.Size or 0) + 0.5)
+			end
+			if details:FindFirstChild("Location") then
+				details.Location.Text = "Location: " .. tostring(inst.Zone or "Unknown")
+			end
+			if details:FindFirstChild("Rarity") then
+				local info2 = FishData.Fish[fishName]
+				details.Rarity.Text = "Rarity: " .. rarityLabel(info2 and info2.BaseRarity)
+			end
+			if details:FindFirstChild("Time") then
+				details.Time.Text = inst.Time and
+					("Time: " .. os.date("%m/%d %I:%M%p", inst.Time)) or
+					"Time: -"
+			end
+			if details:FindFirstChild("CaughtBy") then
+				if inst.CoOp and inst.Owner then
+					details.CaughtBy.Text = "Co-Op: " .. tostring(inst.Owner)
+				else
+					details.CaughtBy.Text = "Co-Op: -"
+				end
+			end
+		end
+	end
+end
+
+local function buildTypeEntries(profile)
+	local entries = {}
+	local profileFish = (profile and profile.Fish) or {}
+
+	for fishName, info in pairs(FishData.Fish) do
+		local bucket = profileFish[fishName]
+		local instancesList = bucket and bucket.Instances or {}
+		local found = instancesList and #instancesList > 0
+
+		table.insert(entries, {
+			FishName = fishName,
+			Found = found,
+			Best = found and bestInstance(instancesList) or nil,
+			DisplayName = info.Name or fishName,
+		})
+	end
+
+	table.sort(entries, function(a, b)
+		if a.Found ~= b.Found then
+			return a.Found and not b.Found
+		end
+		return a.DisplayName < b.DisplayName
+	end)
+
+	return entries
+end
+
+local function renderTypes(profile)
+	clear(spawnedTypes)
+
+	local entries = buildTypeEntries(profile)
+
+	for i, entry in ipairs(entries) do
+		local fishName = entry.FishName
+		local slot = typeTemplate:Clone()
+		slot.Name = "Slot_" .. fishName
+		slot.Visible = true
+		slot.Parent = list
+		spawnedTypes[fishName] = slot
+
+		setNameIconColor(slot, fishName)
+
+		local details = slot:FindFirstChild("Details")
+		if entry.Found then
+			local best = entry.Best
+			if details then
+				if details:FindFirstChild("Weight") then
+					details.Weight.Text = best and
+						("Weight: " .. math.floor((best.Size or 0) + 0.5)) or
+						"Weight: -"
+				end
+				if details:FindFirstChild("Location") then
+					details.Location.Text = best and
+						("Location: " .. tostring(best.Zone or "Unknown")) or
+						"Location: -"
+				end
+				if details:FindFirstChild("Rarity") then
+					local info2 = FishData.Fish[fishName]
+					details.Rarity.Text = "Rarity: " .. rarityLabel(info2 and info2.BaseRarity)
+				end
+				if details:FindFirstChild("Time") then
+					details.Time.Text = best and best.Time and
+						("Time: " .. os.date("%m/%d %I:%M%p", best.Time)) or
+						"Time: -"
+				end
+			end
+		else
+			applyUnfoundLook(slot, fishName)
+		end
+
+		local btn = slot:FindFirstChild("TextButton")
+		if btn and btn:IsA("TextButton") then
+			btn.AutoButtonColor = false
+			btn.MouseButton1Click:Connect(function()
+				if IsShiftDown() then
+					DebugStartFish:FireServer(fishName)
+					return
+				end
+
+				if not latestProfile or not entry.Found then
+					return
+				end
+
+				showInstances(fishName)
+				renderInstances(latestProfile, fishName)
+			end)
+		end
+	end
+end
+
+local function SetOpen(state)
+	isOpen = state
+	gui.Enabled = isOpen
+
+	if isOpen then
+		showTypes()
+		if latestProfile then
+			renderTypes(latestProfile)
+		end
+	end
+end
+
+local function Toggle()
+	SetOpen(not isOpen)
+end
+
+backButton.MouseButton1Click:Connect(function()
+	if not latestProfile then return end
+	showTypes()
+	renderTypes(latestProfile)
+end)
+
+closeButton.MouseButton1Click:Connect(function()
+	SetOpen(false)
+end)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.KeyCode == TOGGLE_KEY then
+		Toggle()
+	end
+end)
+
+latestProfile = GetInventory:InvokeServer()
+showTypes()
+renderTypes(latestProfile)
+SetOpen(false)
+
+InventoryChanged.OnClientEvent:Connect(function(newProfile)
+	latestProfile = newProfile
+
+	if not isOpen then
+		return
+	end
+
+	if view == "types" then
+		renderTypes(newProfile)
+	else
+		renderInstances(newProfile, selectedFish)
+	end
+end)
